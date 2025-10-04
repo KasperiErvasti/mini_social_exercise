@@ -1016,7 +1016,19 @@ def user_risk_analysis(user_id):
 
     score = 0
 
+    account_age_in_days = get_account_age_in_days(user_id)
+
+
     return score
+
+
+def get_account_age_in_days(user_id):
+    stmt = f"""
+    SELECT created_at FROM users
+    WHERE id = {user_id}
+    """
+    account_created_at = query_db(stmt)
+    return (datetime.utcnow() - account_created_at).days 
 
 
 # Task 3.1
@@ -1059,10 +1071,10 @@ def moderate_content(content):
 def moderate_finnish_social_security_numbers(content, score):
     """This is my extra moderation measure."""
     finnish_social_security_number_regex = r"\d{6}[-+ABCDEFYXWVU]\d{3}[\dA-Z]"
-    url_pattern = re.compile(finnish_social_security_number_regex)
-    found_urls = url_pattern.findall(content)
-    score += len(found_urls) * 2
-    moderated_content = url_pattern.sub("[SSN removed]", content)
+    ssn_pattern = re.compile(finnish_social_security_number_regex)
+    found_ssns = ssn_pattern.findall(content)
+    score += len(found_ssns) * 2
+    moderated_content = ssn_pattern.sub("[SSN removed]", content)
 
     return moderated_content, score
 
