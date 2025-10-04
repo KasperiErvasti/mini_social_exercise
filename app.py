@@ -1050,7 +1050,19 @@ def moderate_content(content):
 
     moderated_content, score = moderate_tier3_words(moderated_content, score)
     moderated_content, score = moderate_links(moderated_content, score)
+    moderated_content, score = moderate_finnish_social_security_numbers(moderated_content, score)
     score = moderate_excessive_capitalization(content, score)
+
+    return moderated_content, score
+
+
+def moderate_finnish_social_security_numbers(content, score):
+    """This is my extra moderation measure."""
+    finnish_social_security_number_regex = r"\d{6}[-+ABCDEFYXWVU]\d{3}[\dA-Z]"
+    url_pattern = re.compile(finnish_social_security_number_regex)
+    found_urls = url_pattern.findall(content)
+    score += len(found_urls) * 2
+    moderated_content = url_pattern.sub("[SSN removed]", content)
 
     return moderated_content, score
 
