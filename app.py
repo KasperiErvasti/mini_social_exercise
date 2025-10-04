@@ -1014,21 +1014,129 @@ def user_risk_analysis(user_id):
         Then, navigate to the /admin endpoint. (http://localhost:8080/admin)
     """
 
-    score = 0
+    user_risk_score = 0
+
+    profile_score = get_profile_text_content_score(user_id)
+
+    posts_content, comments_content = get_all_content(user_id)
+    average_post_score = calculate_average_score(posts_content)
+    average_comment_score = calculate_average_score(comments_content)
+    dupe_count = get_dupe_post_comment_count_over_threshold(user_id, 3)
+
+    content_risk_score = (
+        (profile_score * 1) + (average_post_score * 3) + (average_comment_score * 1) + (dupe_count * 0.5)
+    )
 
     account_age_in_days = get_account_age_in_days(user_id)
+    multiplier = 1
+    if account_age_in_days < 7:
+        multiplier = 1.5
+    elif account_age_in_days < 30:
+        multiplier = 1.2
 
+    user_risk_score = content_risk_score * multiplier
+
+    return user_risk_score
+
+
+def get_dupe_post_comment_count_over_threshold(user_id, duplicate_threshold=3):
+    pstmt_dupe_posts = """
+    SELECT COUNT(*) AS num_of_duplicates_going_over_threshold
+    FROM (
+        SELECT
+            COUNT(*) as duplicates
+        FROM posts
+        WHERE user_id = ?
+        GROUP BY content
+        HAVING duplicates >= ?
+    );
+    """
+    pstmt_dupe_comments = """
+    SELECT COUNT(*) AS num_of_duplicates_going_over_threshold
+    FROM (
+        SELECT
+            COUNT(*) as duplicates
+        FROM comments
+        WHERE user_id = ?
+        GROUP BY content
+        HAVING duplicates >= ?
+    );
+    """
+    results_post = query_db(
+        pstmt_dupe_posts,
+        (
+            user_id,
+            duplicate_threshold,
+        ),
+        one=True,
+    )
+    results_comment = query_db(
+        pstmt_dupe_comments,
+        (
+            user_id,
+            duplicate_threshold,
+        ),
+        one=True,
+    )
+    post_dupes = dict(results_post)['num_of_duplicates_going_over_threshold']
+    comment_dupes = dict(results_comment)['num_of_duplicates_going_over_threshold']
+    return post_dupes + comment_dupes
+
+
+def calculate_average_score(content_list):
+    if len(content_list) == 0:
+        return 0
+    total_content_score = 0
+
+    for content in content_list:
+        if content:
+            _, score = moderate_content(content)
+            total_content_score += score
+
+    return total_content_score / len(content_list)
+
+
+def get_all_content(user_id):
+    pstmt_post_content = f"""
+    SELECT content
+    FROM posts
+    WHERE user_id = ?
+    """
+    pstmt_comment_content = f"""
+    SELECT content
+    FROM comments
+    WHERE user_id = ?
+    """
+    results = query_db(pstmt_post_content, (user_id,))
+    posts_content = [row['content'] for row in results]
+    results = query_db(pstmt_comment_content, (user_id,))
+    comments_content = [row['content'] for row in results]
+    return posts_content, comments_content
+
+
+def get_profile_text_content_score(user_id):
+    pstmt = f"""
+    SELECT profile FROM users
+    WHERE id = ?
+    """
+    score = 0
+    results = query_db(pstmt, (user_id,), one=True)
+    profile_content = dict(results)['profile']
+    if profile_content:
+        _, score = moderate_content(profile_content)
 
     return score
 
 
 def get_account_age_in_days(user_id):
-    stmt = f"""
+    pstmt = f"""
     SELECT created_at FROM users
-    WHERE id = {user_id}
+    WHERE id = ?
     """
-    account_created_at = query_db(stmt)
-    return (datetime.utcnow() - account_created_at).days 
+    results = query_db(pstmt, (user_id,), one=True)
+    account_created_at_dt = dict(results)['created_at']
+    account_age_in_days = (datetime.utcnow() - account_created_at_dt).days
+    return account_age_in_days
 
 
 # Task 3.1
@@ -1062,7 +1170,9 @@ def moderate_content(content):
 
     moderated_content, score = moderate_tier3_words(moderated_content, score)
     moderated_content, score = moderate_links(moderated_content, score)
-    moderated_content, score = moderate_finnish_social_security_numbers(moderated_content, score)
+    moderated_content, score = moderate_finnish_social_security_numbers(
+        moderated_content, score
+    )
     score = moderate_excessive_capitalization(content, score)
 
     return moderated_content, score
@@ -1124,9 +1234,10 @@ def moderate_excessive_capitalization(content: str, score):
             if char.isupper():
                 uppercase_chars_count += 1
 
-    percentage_of_uppercase = uppercase_chars_count / alphabetic_chars_count
-    if alphabetic_chars_count > 15 and percentage_of_uppercase > 0.7:
-        score += 0.5
+    if alphabetic_chars_count > 15:
+        percentage_of_uppercase = uppercase_chars_count / alphabetic_chars_count
+        if percentage_of_uppercase > 0.7:
+            score += 0.5
 
     return score
 
