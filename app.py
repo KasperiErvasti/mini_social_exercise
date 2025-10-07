@@ -994,9 +994,104 @@ def recommend(user_id, filter_following):
     - https://www.researchgate.net/publication/227268858_Recommender_Systems_Handbook
     """
 
-    recommended_posts = {}
+    positive_reactions = ('like', 'love', 'laugh', 'wow')
+    # For some reason this didn't work with ','.join(positive_reactions) -> using ? instead.
+    positive_reacts_placeholders = ','.join('?' * len(positive_reactions))
+
+    liked_posts_content = query_db(
+        f'''
+        SELECT p.content
+        FROM posts p
+        JOIN reactions r ON p.id = r.post_id
+        WHERE r.user_id = ? AND r.reaction_type IN ({positive_reacts_placeholders})
+        ''',
+        (user_id, *positive_reactions),
+    )
+
+    if not liked_posts_content:
+        return query_db(
+            '''
+            SELECT p.id, p.content, p.created_at, u.username, u.id as user_id
+            FROM posts p JOIN users u ON p.user_id = u.id
+            WHERE p.user_id != ? ORDER BY p.created_at DESC LIMIT 5
+            ''',
+            (user_id,),
+        )
+
+    word_counts = collections.Counter()
+    stop_words = {
+        'a',
+        'an',
+        'the',
+        'in',
+        'on',
+        'is',
+        'it',
+        'to',
+        'for',
+        'of',
+        'and',
+        'with',
+    }
+
+    for post in liked_posts_content:
+        words = re.findall(r'\b\w+\b', post['content'].lower())
+        for word in words:
+            if word not in stop_words and len(word) > 2:
+                word_counts[word] += 1
+
+    top_keywords = [word for word, _ in word_counts.most_common(10)]
+
+    query = """
+    SELECT
+        p.id,
+        p.content,
+        p.created_at,
+        u.username,
+        u.id as user_id
+    FROM posts p
+    JOIN users u ON p.user_id = u.id
+    """
+    params = []
+
+    if filter_following:
+        query += (
+            " WHERE p.user_id IN (SELECT followed_id FROM follows WHERE follower_id = ?)"
+        )
+        params.append(user_id)
+
+    all_other_posts = query_db(query, tuple(params))
+
+    recommended_posts = []
+    reacted_post_ids = {
+        post['id']
+        for post in query_db(
+            'SELECT post_id as id FROM reactions WHERE user_id = ?', (user_id,)
+        )
+    }
+
+    scored_posts = []
+    for post in all_other_posts:
+        if post['id'] in reacted_post_ids or post['user_id'] == user_id:
+            continue
+
+        keyword_score = calculate_keyword_score(post['content'], top_keywords)
+        if keyword_score > 0:
+            scored_posts.append((post, keyword_score, post['created_at']))
+
+    # sort by keyword score and created at
+    scored_posts.sort(key=lambda p: (p[1], p[2]), reverse=True)
+
+    recommended_posts = [post for post, _, _ in scored_posts[:5]]
 
     return recommended_posts
+
+
+def calculate_keyword_score(content, top_keywords):
+    joined_keywords = '|'.join(re.escape(word) for word in top_keywords)
+    pattern = re.compile(fr'(?i)\b({joined_keywords})\b')
+    found_keywords = pattern.findall(content)
+    return len(found_keywords)
 
 
 # Task 3.2
@@ -1024,7 +1119,10 @@ def user_risk_analysis(user_id):
     dupe_count = get_dupe_post_comment_count_over_threshold(user_id, 3)
 
     content_risk_score = (
-        (profile_score * 1) + (average_post_score * 3) + (average_comment_score * 1) + (dupe_count * 0.5)
+        (profile_score * 1)
+        + (average_post_score * 3)
+        + (average_comment_score * 1)
+        + (dupe_count * 0.5)
     )
 
     account_age_in_days = get_account_age_in_days(user_id)
