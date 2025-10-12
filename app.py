@@ -1059,6 +1059,13 @@ def recommend(user_id, filter_following):
             " WHERE p.user_id IN (SELECT followed_id FROM follows WHERE follower_id = ?)"
         )
         params.append(user_id)
+    else:
+        followed_ids = {
+            post['id']
+            for post in query_db(
+                'SELECT followed_id as id FROM follows WHERE follower_id = ?', (user_id,)
+            )
+        }
 
     all_other_posts = query_db(query, tuple(params))
 
@@ -1076,6 +1083,8 @@ def recommend(user_id, filter_following):
             continue
 
         keyword_score = calculate_keyword_score(post['content'], top_keywords)
+        if not filter_following and post['user_id'] in followed_ids:
+            keyword_score += 2
         if keyword_score > 0:
             scored_posts.append((post, keyword_score, post['created_at']))
 
