@@ -41,6 +41,19 @@ def calculate_optimal_lda(corpus, dictionary, bow_list, upper_range=20):
     return optimal_lda, optimal_k
 
 
+def interpret_sentiment_score(overall_score):
+    """Interpreted according to:
+    https://hex.tech/templates/sentiment-analysis/vader-sentiment-analysis/
+    """
+    sentiment = "neutral"
+    if overall_score >= 0.05:
+        sentiment = "positive"
+    elif overall_score <= -0.05:
+        sentiment = "negative"
+
+    return sentiment
+
+
 def main():
     # Exercise 4.1
     nltk.download('punkt_tab')
@@ -127,7 +140,8 @@ def main():
     # Used this to get the optimal_k
     # optimal_lda, optimal_k = calculate_optimal_lda(corpus, dictionary, bow_list, upper_range=20)
 
-    optimal_k = 14  # optimal k is 14 when tried for 2-19 topics
+    # optimal k is 14 when tried for 2-19 topics (only tested up to 19 because takes too long)
+    optimal_k = 14
     optimal_lda = LdaModel(
         corpus, num_topics=optimal_k, id2word=dictionary, passes=10, random_state=2
     )
@@ -145,18 +159,54 @@ def main():
     topic_list = [(i, count) for i, count in enumerate(topic_counts)]
     topic_list.sort(key=lambda x: x[1], reverse=True)
 
-    for i, count in topic_list[:10]:
+    for topic_num, count in topic_list[:10]:
         print(
-            f"Topic {i+1}: {count} posts, represented by words: {topic_words_lists[i]}"
+            f"Topic {topic_num+1}: {count} posts, represented by words: {topic_words_lists[topic_num]}"
         )
 
     # Exercise 4.2
+    print("------------------------")
+    print("Ex 4.2")
+    nltk.download('vader_lexicon')
+
     conn = sqlite3.connect("database.sqlite")
     stmt = "SELECT id, content FROM posts"
     post_data = pd.read_sql_query(stmt, conn)
     stmt = "SELECT id, content FROM comments"
     comment_data = pd.read_sql_query(stmt, conn)
     conn.close()
+    combined_df = pd.concat([post_data, comment_data], ignore_index=True)
+
+    sia = SentimentIntensityAnalyzer()
+    combined_df['sentiment_score'] = combined_df['content'].apply(
+        lambda content: sia.polarity_scores(content)['compound']
+    )
+
+    overall_sentiment = combined_df['sentiment_score'].mean()
+    print(f"Overall sentiment score (across post and comments): {overall_sentiment:.3f}")
+    sentiment = interpret_sentiment_score(overall_sentiment)
+    print(f"Overall sentiment is {sentiment}")
+
+    # topic calcs
+    topic_sentiment_scores = []
+
+    for topic_num, _ in topic_list[:10]:
+        topic_posts = []
+        for i, bow in enumerate(corpus):
+            topic_dist = optimal_lda.get_document_topics(bow)
+            dominant_topic = max(topic_dist, key=lambda item: item[1])[0]
+            if dominant_topic == topic_num:
+                topic_posts.append(post_data.iloc[i]['content'])
+
+        if topic_posts:
+            scores = [sia.polarity_scores(text)['compound'] for text in topic_posts]
+            avg_score = sum(scores) / len(scores)
+            topic_sentiment_scores.append((topic_num, avg_score))
+
+    print("\nTop 10 topic sentiments")
+    for topic_num, avg_score in topic_sentiment_scores:
+        sentiment = interpret_sentiment_score(avg_score)
+        print(f"Topic {topic_num+1}: {avg_score:.2f} ({sentiment})")
 
 
 if __name__ == '__main__':
